@@ -1,0 +1,184 @@
+---
+title: "Assignment 2"
+author: "Ruowen Wang"
+date: "9/22/2020"
+output: html_document
+---
+
+```{r}
+library(data.table)
+library(leaflet)
+library(tidyverse)
+library(dplyr)
+```
+
+# Step 1: Data Wrangling
+### Merging data.
+```{r}
+individual <- data.table::fread("/Users/christina/Desktop/chs_individual.txt")
+regional <- data.table::fread("/Users/christina/Desktop/chs_regional.txt")
+totaldata <- merge(
+  x=individual, y=regional, by.x="townname", by.y="townname", 
+  all.x=TRUE, all.y=FALSE
+)
+
+head(totaldata)
+tail(totaldata)
+```
+
+```{r}
+totaldata[,bmixx:=mean(bmi,na.rm=TRUE),by=.(male, hispanic)]
+totaldata[,fevxx:=mean(fev,na.rm=TRUE),by=.(male, hispanic)]
+
+totaldata[,bmi:=ifelse(is.na(bmi),bmixx,bmi)]
+totaldata[,fev:=ifelse(is.na(fev),fevxx,fev)]
+```
+
+### 1: After merging the data, make sure you don’t have any duplicates by counting the number of rows. Make sure it matches.
+```{r}
+nrow(totaldata)==nrow(individual)
+```
+
+### 2: Create a new categorical variable named “obesity_level” using the BMI measurement, create a summary table that contains the minimum BMI, maximum BMI, and the total number of observations per category.
+```{r}
+totaldata[bmi<14, obesity_level := "underweight"]
+totaldata[bmi>=14 & bmi<22, obesity_level := "normal"]
+totaldata[bmi>=22 & bmi<24, obesity_level := "overweight"]
+totaldata[bmi>=24, obesity_level := "obese"]
+
+totaldata[, .(
+  bmimin = min(bmi, na.rm = TRUE),
+  bmimax = max(bmi, na.rm = TRUE),
+n=length(bmi)
+),
+by = obesity_level] [order(obesity_level)]
+```
+
+### 3: Create another categorical variable named “smoke_gas_exposure” that summarizes “Second Hand Smoke” and “Gas Stove.” The variable should have four categories in total.
+```{r}
+totaldata[gasstove == 0 & smoke == 0, smoke_gas_exposure := "no"]
+totaldata[gasstove == 0 & smoke == 1, smoke_gas_exposure := "smoke"]
+totaldata[gasstove == 1 & smoke == 0, smoke_gas_exposure := "gas"]
+totaldata[gasstove == 1 & smoke == 1, smoke_gas_exposure := "smoke+gas"]
+totaldata[is.na(smoke) | is.na(gasstove), smoke_gas_exposure := NA]
+
+totaldata[, .(
+n=length(bmi)
+),
+by = smoke_gas_exposure] [order(smoke_gas_exposure)]
+```
+
+### 4: Create four summary tables showing the average and sd of “Forced expiratory volume in 1 second (ml)” and asthma indicator by town, sex, obesity level, and “smoke_gas_exposure.”
+```{r}
+totaldata[, .(
+  fevave = mean(fev, na.rm = TRUE),
+  fevsd = sd(fev, na.rm = TRUE)
+),
+by = townname] [order(townname)]
+```
+```{r}
+totaldata[, .(
+  fevave = mean(fev, na.rm = TRUE),
+  fevsd = sd(fev, na.rm = TRUE)
+),
+by = male] [order(male)]
+```
+
+```{r}
+totaldata[, .(
+  fevave = mean(fev, na.rm = TRUE),
+  fevsd = sd(fev, na.rm = TRUE)
+),
+by = obesity_level] [order(obesity_level)]
+```
+
+```{r}
+totaldata[, .(
+  fevave = mean(fev, na.rm = TRUE),
+  fevsd = sd(fev, na.rm = TRUE)
+),
+by = smoke_gas_exposure] [order(smoke_gas_exposure)]
+```
+
+
+# Step 1: Looking at the Data (EDA)
+### 1. Facet plot showing scatterplots with regression lines of BMI vs FEV by “townname”.
+```{r}
+totaldata %>%
+  ggplot(mapping=aes(x=bmi, y=fev, color=townname))+
+  geom_point()+
+  stat_smooth(method=lm)+
+  facet_wrap(~townname, nrow = 4)
+```
+
+### 2: Stacked histograms of FEV by BMI category and FEV by smoke/gas exposure. Use different color schemes than the ggplot default.
+```{r}
+totaldata %>%
+  ggplot()+
+  geom_histogram(mapping=aes(x=fev,fill=obesity_level))+
+  scale_fill_brewer(palette="BuGn")+
+  labs(title = "Histogram of FEV by BMI category", x="FEV", y="Count")+
+  theme_bw()
+```
+
+```{r}
+totaldata %>%
+  filter(!(smoke_gas_exposure %in% NA)) %>%
+  ggplot()+
+  geom_histogram(mapping=aes(x=fev,fill=smoke_gas_exposure))+
+  scale_fill_brewer(palette="BuGn")+
+  labs(title = "Histogram of FEV by smoke/gas exposure", x="FEV", y="Count")+
+  theme_bw()
+```
+
+### 3. Barchart of BMI by smoke/gas exposure.
+```{r}
+totaldata %>%
+  filter(!(smoke_gas_exposure %in% NA)) %>%
+  ggplot()+
+  geom_bar(mapping = aes(x=obesity_level,fill=smoke_gas_exposure))+
+  scale_fill_brewer(palette="BuGn")+
+  labs(title = "Barchart of BMI by smoke/gas exposure", x="obesity_level", y="Count")+
+  theme_bw()
+```
+
+### 4. Statistical summary graphs of FEV by BMI and FEV by smoke/gas exposure category.
+```{r}
+totaldata %>%
+  ggplot(mapping = aes(x=obesity_level, y=fev))+
+  stat_summary(fun.data = "mean_sdl")
+totaldata %>%
+  filter(!(smoke_gas_exposure %in% NA)) %>%
+  ggplot(mapping = aes(x=smoke_gas_exposure, y=fev))+
+  stat_summary(fun.data = "mean_sdl")
+```
+
+### 5. A leaflet map showing the concentrations of PM2.5 mass in each of the CHS communities.
+```{r}
+totaldata_m = totaldata[!is.na(pm25_mass)]
+pm25_pal = colorNumeric(c('blue','purple','red'),domain = totaldata_m$pm25_mass)
+leaflet(totaldata_m) %>%
+  addProviderTiles('OpenStreetMap') %>%
+  addCircles(lat = ~lat, lng = ~lon, color = ~pm25_pal(pm25_mass), opacity = 1, fillOpacity = 1, radius = 500) %>%
+  addLegend('bottomleft', pal = pm25_pal, values = totaldata_m$pm25_mass, title = "Concentrations of PM2.5 mass in each of the CHS communities", opacity = 1)
+```
+
+### 6. Choose a visualization to examine whether PM2.5 mass is associated with FEV.
+```{r}
+totaldata %>%
+  filter(!(pm25_mass %in% NA)) %>%
+  ggplot(mapping=aes(x=pm25_mass, y=fev, color=townname))+
+  geom_point()+
+  stat_smooth(method=lm)
+```
+
+-Conclusion:
+
+1. What is the association between BMI and FEV? 
+-From the scatterplots in question 1, we can see that there exist positive relationship between BMI and FEV in each town. The first histogram in question 2 also can prove this association, underweight people have lower FEV than overweight and obese people, FEV will increase with enhance of BMI. The first statistical summary graphs in question 4 also can prove this positive relationship. There is a positive association between BMI and FEV.
+
+2. What is the association between smoke and gas exposure and FEV?
+-From the second histogram in question 2, we can see FEV is fairly even across these four exposure categories. And the second statistical summary graphs in question 4, the mean values of the four exposure categories are very similar. So I don't think there exist any significant association between smoke/gas exposure and FEV.
+
+3. What is the association between PM2.5 exposure and FEV?
+-From the last plot in question 6, it seems like no association between PM2.5 exposure and FEV. From the leaflet map in question 5, we can find that Riverside has the worst air pollution.
